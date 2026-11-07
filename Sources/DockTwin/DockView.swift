@@ -1,0 +1,277 @@
+import AppKit
+import SwiftUI
+
+final class DockView: NSView {
+    let model: DockModel
+    var showSettings: (() -> Void)?
+    private let glass = NSVisualEffectView()
+    private var tiles: [DockTile] = []
+    private var tracking: NSTrackingArea?
+    private var popover: NSPopover?
+    private var baseSize: CGFloat = 48
+    private var pointer: NSPoint?
+    private let padding: CGFloat = 12
+    private let spacing: CGFloat = 5
+    private var menuActions: [() -> Void] = []
+    private var separator = NSView()
+
+    init(model: DockModel) {
+        self.model = model
+        super.init(frame: .zero)
+        wantsLayer = true
+        glass.material = .hudWindow
+        glass.blendingMode = .behindWindow
+        glass.state = .active
+        glass.wantsLayer = true
+        glass.layer?.cornerRadius = 23
+        glass.layer?.borderWidth = 0.75
+        glass.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
+        addSubview(glass)
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        glass.addSubview(separator)
+        registerForDraggedTypes([.fileURL])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var isInteracting: Bool { popover?.isShown == true || tiles.contains { $0.dragging } }
+
+    func rebuild(maxLength: CGFloat) -> NSSize {
+        pointer = nil
+        tiles.forEach { $0.removeFromSuperview() }
+        tiles = model.visibleItems.map { item in
+            let tile = DockTile(item: item, model: model)
+            tile.dock = self
+            addSubview(tile)
+            return tile
+        }
+        let count = CGFloat(max(tiles.count, 1))
+        baseSize = min(CGFloat(model.preferences.iconSize), max(16, (maxLength - 2 * padding - 18) / count - spacing))
+        let length = min(maxLength, max(100, count * (baseSize + spacing) + 2 * padding + 18))
+        let depth = baseSize * CGFloat(model.preferences.magnification) + 50
+        let size = model.preferences.edge.vertical ? NSSize(width: depth, height: length) : NSSize(width: length, height: depth)
+        setFrameSize(size)
+        layoutTiles(animated: false)
+        return size
+    }
+
+    override func updateTrackingAreas() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(tracking!)
+        super.updateTrackingAreas()
+    }
+    override func mouseMoved(with event: NSEvent) {
+        pointer = convert(event.locationInWindow, from: nil)
+        layoutTiles(animated: true)
+    }
+    override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+    override func mouseExited(with event: NSEvent) {
+        pointer = nil
+        layoutTiles(animated: true)
+    }
+
+    private func layoutTiles(animated: Bool) {
+        let edge = model.preferences.edge
+        let vertical = edge.vertical
+        let depth = baseSize + 22
+        let glassFrame: NSRect
+        switch edge {
+        case .bottom: glassFrame = NSRect(x: 0, y: 0, width: bounds.width, height: depth)
+        case .top: glassFrame = NSRect(x: 0, y: bounds.height - depth, width: bounds.width, height: depth)
+        case .left: glassFrame = NSRect(x: 0, y: 0, width: depth, height: bounds.height)
+        case .right: glassFrame = NSRect(x: bounds.width - depth, y: 0, width: depth, height: bounds.height)
+        }
+        glass.frame = glassFrame
+        let section = tiles.firstIndex { !$0.item.isApplication }
+        let hasDivider = section.map { $0 > 0 } ?? false
+        let baselineLength = CGFloat(tiles.count) * (baseSize + spacing) - spacing + (hasDivider ? 14 : 0)
+        let available = vertical ? bounds.height : bounds.width
+        let start = (available - baselineLength) / 2
+        let cursor = pointer.map { vertical ? bounds.height - $0.y : $0.x }
+        var sizes: [CGFloat] = []
+        for index in tiles.indices {
+            let center = start + CGFloat(index) * (baseSize + spacing) + baseSize / 2 + ((hasDivider && index >= section!) ? 14 : 0)
+            let distance = cursor.map { abs($0 - center) } ?? .infinity
+            let influence = max(0, 1 - distance / (baseSize * 2.5))
+            let smooth = (1 - cos(influence * .pi)) / 2
+            sizes.append(baseSize * (1 + (CGFloat(model.preferences.magnification) - 1) * smooth))
+        }
+        let expanded = sizes.reduce(0, +) + CGFloat(max(0, tiles.count - 1)) * spacing + (hasDivider ? 14 : 0)
+        // Keep the magnified row inside the display even when many apps are running.
+        let fit = min(1, max(1, available - padding * 2) / max(1, expanded))
+        sizes = sizes.map { $0 * fit }
+        let total = sizes.reduce(0, +) + CGFloat(max(0, tiles.count - 1)) * spacing + (hasDivider ? 14 : 0)
+        var offset = (available - total) / 2
+        separator.isHidden = !hasDivider
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.12 : 0
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for (index, tile) in tiles.enumerated() {
+                if hasDivider && index == section {
+                    let line = vertical
+                        ? NSRect(x: glassFrame.minX + 10, y: bounds.height - offset - 7, width: depth - 20, height: 1)
+                        : NSRect(x: offset + 7, y: glassFrame.minY + 10, width: 1, height: depth - 20)
+                    separator.frame = convert(line, to: glass)
+                    offset += 14
+                }
+                let size = sizes[index]
+                let rect: NSRect
+                switch edge {
+                case .bottom: rect = NSRect(x: offset, y: 10, width: size, height: size + 8)
+                case .top: rect = NSRect(x: offset, y: bounds.height - size - 18, width: size, height: size + 8)
+                case .left: rect = NSRect(x: 10, y: bounds.height - offset - size, width: size + 8, height: size)
+                case .right: rect = NSRect(x: bounds.width - size - 18, y: bounds.height - offset - size, width: size + 8, height: size)
+                }
+                tile.animator().frame = rect
+                offset += size + spacing
+            }
+        }
+    }
+
+    func activate(_ tile: DockTile, event: NSEvent) {
+        if tile.item.isDirectory && event.modifierFlags.intersection([.command, .option]).isEmpty {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.contentViewController = NSHostingController(rootView: FolderView(url: tile.item.url) { [weak self] url in
+                self?.popover?.close()
+                self?.model.open(DockItem(url: url))
+            })
+            popover.contentSize = NSSize(width: 380, height: 360)
+            self.popover?.close()
+            self.popover = popover
+            let edge: NSRectEdge
+            switch model.preferences.edge {
+            case .bottom: edge = .maxY
+            case .top: edge = .minY
+            case .left: edge = .maxX
+            case .right: edge = .minX
+            }
+            popover.show(relativeTo: tile.bounds, of: tile, preferredEdge: edge)
+        } else {
+            model.open(tile.item, modifiers: event.modifierFlags)
+            tile.bounce()
+        }
+    }
+
+    func itemMenu(_ tile: DockTile) -> NSMenu {
+        menuActions = []
+        let menu = NSMenu()
+        add("Открыть", to: menu) { [weak self] in self?.model.open(tile.item) }
+        add("Показать в Finder", to: menu) { NSWorkspace.shared.activateFileViewerSelecting([tile.item.url]) }
+        if let app = model.application(for: tile.item) {
+            add(app.isHidden ? "Показать" : "Скрыть", to: menu) { _ = app.isHidden ? app.unhide() : app.hide() }
+            if app.bundleIdentifier != "com.apple.finder" { add("Завершить", to: menu) { app.terminate() } }
+        }
+        menu.addItem(.separator())
+        if model.items.contains(where: { $0.id == tile.item.id }) {
+            add("Убрать из Dock Twin", to: menu) { [weak self] in self?.model.remove(tile.item) }
+        } else {
+            add("Оставить в Dock Twin", to: menu) { [weak self] in self?.model.add([tile.item.url]) }
+        }
+        menu.addItem(.separator())
+        add("Настройки…", to: menu) { [weak self] in self?.showSettings?() }
+        return menu
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        menuActions = []
+        let menu = NSMenu()
+        add("Добавить приложения, файлы или папки…", to: menu) { [weak self] in self?.model.chooseItems() }
+        add("Настройки…", to: menu) { [weak self] in self?.showSettings?() }
+        return menu
+    }
+    private func add(_ title: String, to menu: NSMenu, action: @escaping () -> Void) {
+        let item = NSMenuItem(title: title, action: #selector(runMenuAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = menuActions.count
+        menuActions.append(action)
+        menu.addItem(item)
+    }
+    @objc private func runMenuAction(_ sender: NSMenuItem) { menuActions[sender.tag]() }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
+        let point = convert(sender.draggingLocation, from: nil)
+        let target = tiles.first { $0.frame.contains(point) }?.item.id
+        model.add(urls, before: target)
+        return true
+    }
+}
+
+final class DockTile: NSView, NSDraggingSource {
+    let item: DockItem
+    let model: DockModel
+    weak var dock: DockView?
+    var dragging = false
+    private let icon = NSImageView()
+    private let indicator = NSView()
+    private var mouseDownLocation = NSPoint.zero
+
+    init(item: DockItem, model: DockModel) {
+        self.item = item
+        self.model = model
+        super.init(frame: .zero)
+        wantsLayer = true
+        icon.image = NSWorkspace.shared.icon(forFile: item.url.resolvingSymlinksInPath().path)
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.wantsLayer = true
+        addSubview(icon)
+        indicator.wantsLayer = true
+        indicator.layer?.cornerRadius = 2
+        indicator.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.7).cgColor
+        indicator.isHidden = model.application(for: item) == nil
+        addSubview(indicator)
+        toolTip = item.title
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(item.title)
+        setAccessibilityHelp("Открыть. Контекстное меню содержит дополнительные действия.")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    override func layout() {
+        super.layout()
+        let edge = model.preferences.edge
+        switch edge {
+        case .bottom:
+            icon.frame = NSRect(x: 0, y: 8, width: bounds.width, height: bounds.height - 8)
+            indicator.frame = NSRect(x: bounds.midX - 2, y: 1, width: 4, height: 4)
+        case .top:
+            icon.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - 8)
+            indicator.frame = NSRect(x: bounds.midX - 2, y: bounds.height - 5, width: 4, height: 4)
+        case .left:
+            icon.frame = NSRect(x: 8, y: 0, width: bounds.width - 8, height: bounds.height)
+            indicator.frame = NSRect(x: 1, y: bounds.midY - 2, width: 4, height: 4)
+        case .right:
+            icon.frame = NSRect(x: 0, y: 0, width: bounds.width - 8, height: bounds.height)
+            indicator.frame = NSRect(x: bounds.width - 5, y: bounds.midY - 2, width: 4, height: 4)
+        }
+    }
+    override func mouseDown(with event: NSEvent) { mouseDownLocation = event.locationInWindow }
+    override func mouseUp(with event: NSEvent) {
+        if !dragging { dock?.activate(self, event: event) }
+    }
+    override func menu(for event: NSEvent) -> NSMenu? { dock?.itemMenu(self) }
+    override func mouseDragged(with event: NSEvent) {
+        guard !dragging, hypot(event.locationInWindow.x - mouseDownLocation.x, event.locationInWindow.y - mouseDownLocation.y) > 5 else { return }
+        dragging = true
+        let dragItem = NSDraggingItem(pasteboardWriter: item.url as NSURL)
+        dragItem.setDraggingFrame(icon.frame, contents: icon.image)
+        beginDraggingSession(with: [dragItem], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { dragging = false }
+    override func accessibilityPerformPress() -> Bool { model.open(item); return true }
+    func bounce() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let animation = CAKeyframeAnimation(keyPath: model.preferences.edge.vertical ? "transform.translation.x" : "transform.translation.y")
+        let sign: CGFloat = (model.preferences.edge == .right || model.preferences.edge == .top) ? -1 : 1
+        animation.values = [0, 12 * sign, 0, 5 * sign, 0]
+        animation.duration = 0.5
+        icon.layer?.add(animation, forKey: "launch")
+    }
+}
