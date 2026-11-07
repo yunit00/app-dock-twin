@@ -5,6 +5,7 @@ swift build -c release
 binary_dir="$(swift build -c release --show-bin-path)"
 app_dir="$PWD/dist/Dock Twin.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+cp LICENSE "$app_dir/Contents/Resources/LICENSE.txt"
 iconset_dir="$PWD/.build/DockTwin.iconset"
 mkdir -p "$iconset_dir"
 for size in 16 32 128 256 512; do
