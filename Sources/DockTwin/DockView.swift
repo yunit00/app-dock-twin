@@ -290,7 +290,7 @@ final class DockView: NSView, NSWindowDelegate {
         guard sender.draggingPasteboard.availableType(from: DockDragPayload.types) != nil else { return [] }
         if let source = sender.draggingSource as? DockTile, source === localDragTile,
            sender.draggingSourceOperationMask.contains(.move) { return .move }
-        return DockDragPayload.operation(for: sender.draggingSourceOperationMask)
+        return DockDragPayload.operation(for: sender.draggingSourceOperationMask, pasteboard: sender.draggingPasteboard)
     }
     private func finishDrop() {
         receivingDrag = false

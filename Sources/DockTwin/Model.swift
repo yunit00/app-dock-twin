@@ -261,7 +261,10 @@ enum DockDragPayload {
         return item
     }
 
-    static func operation(for mask: NSDragOperation) -> NSDragOperation {
+    static func operation(for mask: NSDragOperation, pasteboard: NSPasteboard? = nil) -> NSDragOperation {
+        // The system Dock can offer valid file URLs with an empty operation mask.
+        // We only pin references; accepting copy here never moves the source file.
+        if mask.isEmpty, let pasteboard, !urls(from: pasteboard).isEmpty { return .copy }
         for operation: NSDragOperation in [.copy, .link, .move, .generic] where mask.contains(operation) {
             return operation
         }

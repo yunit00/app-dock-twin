@@ -278,6 +278,18 @@ final class DockModelTests {
         expectTrue(!restored.preferences.desktopOnly)
         expectEqual(restored.preferences.panelLevel, .floating)
     }
+    func testSystemDockEmptyOperationMask() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.writeObjects([DockDragPayload.writer(for: URL(fileURLWithPath: "/Applications/Example.app"))])
+        expectEqual(DockDragPayload.operation(for: [], pasteboard: pasteboard), .copy)
+        expectEqual(DockDragPayload.operation(for: [.delete], pasteboard: pasteboard), [])
+        pasteboard.clearContents()
+        pasteboard.setString("https://example.com", forType: .URL)
+        expectEqual(DockDragPayload.operation(for: [], pasteboard: pasteboard), [])
+        pasteboard.clearContents()
+        expectEqual(DockDragPayload.operation(for: [], pasteboard: pasteboard), [])
+    }
     func testRemoteURLsAreIgnored() {
         let model = emptyModel()
         model.add([URL(string: "https://example.com")!])
@@ -312,7 +324,8 @@ extension DockModelTests {
             ("application identity migration and running deduplication", tests.testApplicationIdentityMigrationAndRunningDeduplication),
             ("Finder click reopens the application", tests.testFinderClickUsesApplicationReopen),
             ("mouse release after drag never launches an app", tests.testMouseReleaseAfterDragDoesNotLaunchApplication),
-            ("desktop mode migration, layer and persistence", tests.testDesktopModeMigrationAndLayer)
+            ("desktop mode migration, layer and persistence", tests.testDesktopModeMigrationAndLayer),
+            ("system Dock file drop with empty source mask", tests.testSystemDockEmptyOperationMask)
         ]
         for (name, test) in cases {
             tests.setUp()
