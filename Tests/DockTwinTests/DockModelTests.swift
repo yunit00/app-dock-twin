@@ -196,6 +196,39 @@ final class DockModelTests {
         }
     }
 
+    func testReorderingAcrossEntirePanel() {
+        _ = NSApplication.shared
+        for edge in DockEdge.allCases {
+            for fraction: CGFloat in [0.05, 0.5, 0.95] {
+                defaults.removeObject(forKey: "displayOrder")
+                let model = emptyModel()
+                model.preferences.edge = edge
+                model.preferences.animationsEnabled = false
+                let apps = ["A", "B", "C"].map { DockItem(url: URL(fileURLWithPath: "/Applications/\($0).app")) }
+                model.items = apps
+                let view = DockView(model: model)
+                _ = view.rebuild(maxLength: 700)
+                let tiles = view.subviews.compactMap { $0 as? DockTile }
+                let source = tiles[0]
+                let target = tiles[2].frame
+                view.beginReordering(source)
+                let point = edge.vertical
+                    ? NSPoint(x: view.bounds.width * fraction, y: target.midY)
+                    : NSPoint(x: target.midX, y: view.bounds.height * fraction)
+                expectTrue(view.hitTest(point) === view)
+                view.trackLocalDrag(at: point)
+                expectTrue(edge.vertical ? source.frame.midY < tiles[1].frame.midY : source.frame.midX > tiles[1].frame.midX)
+                view.trackLocalDrag(at: NSPoint(x: -20, y: -20))
+                expectTrue(edge.vertical ? source.frame.midY > tiles[1].frame.midY : source.frame.midX < tiles[1].frame.midX)
+                view.trackLocalDrag(at: point)
+                view.commitReordering()
+                view.endReordering()
+                expectEqual(model.items.map(\.id), [apps[1].id, apps[2].id, apps[0].id])
+                expectTrue(view.hitTest(NSPoint(x: source.frame.midX, y: source.frame.midY)) === source)
+            }
+        }
+    }
+
     func testApplicationIdentityMigrationAndRunningDeduplication() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -325,7 +358,8 @@ extension DockModelTests {
             ("Finder click reopens the application", tests.testFinderClickUsesApplicationReopen),
             ("mouse release after drag never launches an app", tests.testMouseReleaseAfterDragDoesNotLaunchApplication),
             ("desktop mode migration, layer and persistence", tests.testDesktopModeMigrationAndLayer),
-            ("system Dock file drop with empty source mask", tests.testSystemDockEmptyOperationMask)
+            ("system Dock file drop with empty source mask", tests.testSystemDockEmptyOperationMask),
+            ("reordering across the entire panel on every edge", tests.testReorderingAcrossEntirePanel)
         ]
         for (name, test) in cases {
             tests.setUp()

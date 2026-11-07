@@ -48,6 +48,12 @@ final class DockView: NSView, NSWindowDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Keep one destination throughout a local drag, including over icons and controls.
+        if localDragTile != nil, bounds.contains(convert(point, from: superview)) { return self }
+        return super.hitTest(point)
+    }
+
     var isInteracting: Bool { popover?.isShown == true || isDragging }
 
     func rebuild(maxLength: CGFloat) -> NSSize {
@@ -126,7 +132,7 @@ final class DockView: NSView, NSWindowDelegate {
         separator.isHidden = !hasDivider
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated && model.animationsAllowed ? (originalDragTiles == nil ? 0.12 : 0.2) : 0
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.timingFunction = CAMediaTimingFunction(name: originalDragTiles == nil ? .easeOut : .easeInEaseOut)
             for (index, tile) in tiles.enumerated() {
                 if hasDivider && index == section {
                     let line = vertical
@@ -236,8 +242,18 @@ final class DockView: NSView, NSWindowDelegate {
         layoutTiles(animated: true)
     }
 
+    func trackLocalDrag(at point: NSPoint) {
+        guard localDragTile != nil else { return }
+        if bounds.contains(point) {
+            previewReordering(at: point)
+        } else {
+            restoreReordering()
+        }
+    }
+
     private func restoreReordering() {
         guard !localDropCommitted, let original = originalDragTiles else { return }
+        guard tiles.map(\.item.id) != original.map(\.item.id) else { return }
         tiles = original
         layoutTiles(animated: true)
     }
@@ -389,6 +405,11 @@ final class DockTile: NSView, NSDraggingSource {
     }
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         context == .withinApplication ? [.move, .copy] : [.copy, .link]
+    }
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        guard let dock, let window = dock.window else { return }
+        // Source updates continue even when the pointer passes over a child view.
+        dock.trackLocalDrag(at: dock.convert(window.convertPoint(fromScreen: screenPoint), from: nil))
     }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         dock?.endReordering()
