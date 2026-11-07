@@ -154,6 +154,117 @@ final class DockModelTests {
             expectEqual(icon.width, icon.height)
         }
     }
+    func testAnimatedReorderingCommitsAndCancelsOnEveryEdge() {
+        _ = NSApplication.shared
+        for edge in DockEdge.allCases {
+            defaults.removeObject(forKey: "displayOrder")
+            let model = emptyModel()
+            model.preferences.edge = edge
+            model.preferences.animationsEnabled = false
+            let apps = ["A", "B", "C"].map { DockItem(url: URL(fileURLWithPath: "/Applications/\($0).app")) }
+            model.items = apps + [DockItem(url: URL(fileURLWithPath: "/tmp/folder"))]
+            let view = DockView(model: model)
+            _ = view.rebuild(maxLength: 700)
+            let tiles = view.subviews.compactMap { $0 as? DockTile }
+            let first = tiles[0]
+            let last = tiles[2]
+            let point = NSPoint(x: last.frame.midX, y: last.frame.midY)
+            view.beginReordering(first)
+            view.previewReordering(at: point)
+            expectEqual(first.alphaValue, 0)
+            expectEqual(model.items.map(\.id), (apps + [tiles[3].item]).map(\.id))
+            view.commitReordering()
+            view.endReordering()
+            expectEqual(Array(model.items.prefix(3)).map(\.id), [apps[1].id, apps[2].id, apps[0].id])
+            expectEqual(first.alphaValue, 1)
+            expectEqual(DockModel(defaults: defaults).items.map(\.id), model.items.map(\.id))
+            let beforeCancel = model.items.map(\.id)
+            let settled = first.frame
+            view.beginReordering(first)
+            let beginning = edge.vertical ? NSPoint(x: 10, y: view.bounds.maxY) : NSPoint(x: 0, y: 10)
+            view.previewReordering(at: beginning)
+            view.endReordering()
+            expectEqual(model.items.map(\.id), beforeCancel)
+            expectEqual(first.frame, settled)
+            // Dragging an app past the files stops at the end of the applications section.
+            view.beginReordering(tiles[1])
+            let end = edge.vertical ? NSPoint(x: 10, y: 0) : NSPoint(x: view.bounds.maxX, y: 10)
+            view.previewReordering(at: end)
+            view.commitReordering()
+            view.endReordering()
+            expectTrue(!model.items.last!.isApplication)
+        }
+    }
+
+    func testApplicationIdentityMigrationAndRunningDeduplication() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("One.app")
+        let second = root.appendingPathComponent("Two.app")
+        let bundleID = "com.example.docktwin.identity-test"
+        for url in [first, second] {
+            try FileManager.default.createDirectory(at: url.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            let plist = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": bundleID, "CFBundlePackageType": "APPL"], format: .xml, options: 0)
+            try plist.write(to: url.appendingPathComponent("Contents/Info.plist"))
+        }
+        let oldItems: [[String: Any]] = [["url": first.absoluteString], ["url": second.absoluteString]]
+        defaults.set(try JSONSerialization.data(withJSONObject: oldItems), forKey: "items")
+        defaults.set([second.path, first.path], forKey: "displayOrder")
+        let model = DockModel(defaults: defaults)
+        expectEqual(model.items.count, 1)
+        expectEqual(model.items[0].id, "app:" + bundleID)
+        let finder = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == "com.apple.finder" }!
+        let finderItem = DockItem(url: finder.bundleURL!)
+        model.items = [finderItem]
+        model.running = [finder]
+        model.preferences.showRunning = true
+        expectEqual(model.visibleItems.count, 1)
+        expectEqual(model.application(for: finderItem)?.processIdentifier, finder.processIdentifier)
+        let other = DockItem(url: first)
+        model.items = [other]
+        model.move(other, in: [finderItem, other])
+        expectEqual(model.visibleItems.map(\.id), [finderItem.id, other.id])
+        expectEqual(model.items.map(\.id), [other.id])
+        let restored = DockModel(defaults: defaults)
+        restored.running = [finder]
+        expectEqual(restored.visibleItems.map(\.id), [finderItem.id, other.id])
+    }
+
+    func testFinderClickUsesApplicationReopen() {
+        let workspace = RecordingWorkspace()
+        let model = DockModel(defaults: defaults, workspace: workspace)
+        let finder = DockItem(url: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))
+        model.open(finder)
+        expectEqual(workspace.openedURL, finder.url)
+        expectTrue(workspace.configuration!.activates)
+        expectTrue(!workspace.configuration!.createsNewApplicationInstance)
+        expectTrue(workspace.configuration!.allowsRunningApplicationSubstitution)
+    }
+
+    func testMouseReleaseAfterDragDoesNotLaunchApplication() {
+        _ = NSApplication.shared
+        let workspace = RecordingWorkspace()
+        let model = DockModel(defaults: defaults, workspace: workspace)
+        model.preferences.showRunning = false
+        model.items = [DockItem(url: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))]
+        let view = DockView(model: model)
+        _ = view.rebuild(maxLength: 700)
+        let tile = view.subviews.compactMap { $0 as? DockTile }.first!
+        let location = NSPoint(x: tile.frame.midX, y: tile.frame.midY)
+        let down = NSEvent.mouseEvent(with: .leftMouseDown, location: location, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        let up = NSEvent.mouseEvent(with: .leftMouseUp, location: location, modifierFlags: [], timestamp: 1, windowNumber: 0, context: nil, eventNumber: 2, clickCount: 1, pressure: 0)!
+        tile.mouseUp(with: up)
+        expectEqual(workspace.openCount, 0)
+        tile.mouseDown(with: down)
+        tile.dragging = true
+        tile.mouseUp(with: up)
+        tile.dragging = false
+        tile.mouseUp(with: up)
+        expectEqual(workspace.openCount, 0)
+        tile.mouseDown(with: down)
+        tile.mouseUp(with: up)
+        expectEqual(workspace.openCount, 1)
+    }
     func testRemoteURLsAreIgnored() {
         let model = emptyModel()
         model.add([URL(string: "https://example.com")!])
@@ -183,7 +294,11 @@ extension DockModelTests {
             ("Dock pasteboard compatibility", tests.testDockPasteboardCompatibility),
             ("settings button on every edge", tests.testSettingsButtonOnEveryEdge),
             ("pin when dropped on unpinned item", tests.testDropOntoUnpinnedRunningItemPinsIt),
-            ("legacy Dock URL and indicator gap", tests.testLegacyDockURLAndIndicatorSpacing)
+            ("legacy Dock URL and indicator gap", tests.testLegacyDockURLAndIndicatorSpacing),
+            ("reorder preview, commit, cancel, section boundaries", tests.testAnimatedReorderingCommitsAndCancelsOnEveryEdge),
+            ("application identity migration and running deduplication", tests.testApplicationIdentityMigrationAndRunningDeduplication),
+            ("Finder click reopens the application", tests.testFinderClickUsesApplicationReopen),
+            ("mouse release after drag never launches an app", tests.testMouseReleaseAfterDragDoesNotLaunchApplication)
         ]
         for (name, test) in cases {
             tests.setUp()
@@ -192,5 +307,16 @@ extension DockModelTests {
             print("PASS \(name)")
         }
         print("All \(cases.count) checks passed")
+    }
+}
+
+final class RecordingWorkspace: NSWorkspace {
+    var openCount = 0
+    var openedURL: URL?
+    var configuration: NSWorkspace.OpenConfiguration?
+    override func openApplication(at applicationURL: URL, configuration: NSWorkspace.OpenConfiguration, completionHandler: (@Sendable (NSRunningApplication?, Error?) -> Void)? = nil) {
+        openCount += 1
+        openedURL = applicationURL
+        self.configuration = configuration
     }
 }

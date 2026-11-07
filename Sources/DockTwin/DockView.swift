@@ -17,6 +17,10 @@ final class DockView: NSView, NSWindowDelegate {
     private let settingsButton = NSButton()
     private let settingsExtent: CGFloat = 38
     private var receivingDrag = false
+    private var originalDragTiles: [DockTile]?
+    private var dragSlotCenters: [CGFloat] = []
+    private weak var localDragTile: DockTile?
+    private var localDropCommitted = false
     var isDragging: Bool { receivingDrag || tiles.contains { $0.dragging } }
     private var magnification: CGFloat { model.animationsAllowed ? CGFloat(model.preferences.magnification) : 1 }
 
@@ -70,6 +74,7 @@ final class DockView: NSView, NSWindowDelegate {
         super.updateTrackingAreas()
     }
     override func mouseMoved(with event: NSEvent) {
+        guard !isDragging else { return }
         pointer = convert(event.locationInWindow, from: nil)
         layoutTiles(animated: true)
     }
@@ -118,7 +123,7 @@ final class DockView: NSView, NSWindowDelegate {
         var offset = (available - total) / 2
         separator.isHidden = !hasDivider
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = animated && model.animationsAllowed ? 0.12 : 0
+            context.duration = animated && model.animationsAllowed ? (originalDragTiles == nil ? 0.12 : 0.2) : 0
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             for (index, tile) in tiles.enumerated() {
                 if hasDivider && index == section {
@@ -205,22 +210,78 @@ final class DockView: NSView, NSWindowDelegate {
     @objc private func openSettings() { showSettings?() }
     @objc private func runMenuAction(_ sender: NSMenuItem) { menuActions[sender.tag]() }
 
+    func beginReordering(_ tile: DockTile) {
+        pointer = nil
+        originalDragTiles = tiles
+        localDragTile = tile
+        localDropCommitted = false
+        layoutTiles(animated: false)
+        dragSlotCenters = tiles.map { model.preferences.edge.vertical ? bounds.height - $0.frame.midY : $0.frame.midX }
+        tile.alphaValue = 0
+        tile.layoutSubtreeIfNeeded()
+    }
+
+    func previewReordering(at point: NSPoint) {
+        guard let source = localDragTile, let original = originalDragTiles,
+              let current = tiles.firstIndex(where: { $0 === source }) else { return }
+        let coordinate = model.preferences.edge.vertical ? bounds.height - point.y : point.x
+        let section = original.indices.filter { original[$0].item.isApplication == source.item.isApplication }
+        // Use stationary slots so animated neighbours cannot cause insertion to oscillate.
+        guard let destination = section.min(by: { abs(dragSlotCenters[$0] - coordinate) < abs(dragSlotCenters[$1] - coordinate) }),
+              destination != current else { return }
+        tiles.remove(at: current)
+        tiles.insert(source, at: destination)
+        layoutTiles(animated: true)
+    }
+
+    private func restoreReordering() {
+        guard !localDropCommitted, let original = originalDragTiles else { return }
+        tiles = original
+        layoutTiles(animated: true)
+    }
+
+    func commitReordering() {
+        guard let source = localDragTile else { return }
+        model.move(source.item, in: tiles.map(\.item))
+        localDropCommitted = true
+    }
+
+    func endReordering() {
+        if !localDropCommitted { restoreReordering() }
+        localDragTile?.alphaValue = 1
+        originalDragTiles = nil
+        dragSlotCenters = []
+        localDragTile = nil
+        localDropCommitted = false
+        finishDrop()
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let operation = acceptedOperation(sender)
         receivingDrag = !operation.isEmpty
-        glass.dropHighlighted = receivingDrag
+        glass.dropHighlighted = receivingDrag && localDragTile == nil
+        if receivingDrag, let source = sender.draggingSource as? DockTile, source === localDragTile {
+            previewReordering(at: convert(sender.draggingLocation, from: nil))
+        }
         return operation
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
-    override func draggingExited(_ sender: NSDraggingInfo?) { finishDrop() }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        restoreReordering()
+        finishDrop()
+    }
     override func draggingEnded(_ sender: NSDraggingInfo) { finishDrop() }
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        !acceptedOperation(sender).isEmpty && !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty
+        let accepted = !acceptedOperation(sender).isEmpty && !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty
+        sender.animatesToDestination = accepted && localDragTile != nil && model.animationsAllowed
+        return accepted
     }
     private func acceptedOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
         // Some system sources supply file data lazily. Negotiate using advertised types,
         // then read and validate the URLs when the user releases the drag.
         guard sender.draggingPasteboard.availableType(from: DockDragPayload.types) != nil else { return [] }
+        if let source = sender.draggingSource as? DockTile, source === localDragTile,
+           sender.draggingSourceOperationMask.contains(.move) { return .move }
         return DockDragPayload.operation(for: sender.draggingSourceOperationMask)
     }
     private func finishDrop() {
@@ -229,6 +290,12 @@ final class DockView: NSView, NSWindowDelegate {
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { finishDrop() }
+        if let source = sender.draggingSource as? DockTile, source === localDragTile {
+            previewReordering(at: convert(sender.draggingLocation, from: nil))
+            source.setDragDestination(sender, in: self)
+            commitReordering()
+            return true
+        }
         let urls = DockDragPayload.urls(from: sender.draggingPasteboard)
         guard !urls.isEmpty, !acceptedOperation(sender).isEmpty else { return false }
         let point = convert(sender.draggingLocation, from: nil)
@@ -247,6 +314,7 @@ final class DockTile: NSView, NSDraggingSource {
     private let icon = NSImageView()
     private let indicator = NSView()
     private var mouseDownLocation = NSPoint.zero
+    private var clickArmed = false
 
     init(item: DockItem, model: DockModel) {
         self.item = item
@@ -290,21 +358,41 @@ final class DockTile: NSView, NSDraggingSource {
         }
     }
 
-    override func mouseDown(with event: NSEvent) { mouseDownLocation = event.locationInWindow }
+    override func mouseDown(with event: NSEvent) {
+        mouseDownLocation = event.locationInWindow
+        clickArmed = true
+    }
     override func mouseUp(with event: NSEvent) {
-        if !dragging { dock?.activate(self, event: event) }
+        defer { clickArmed = false }
+        guard clickArmed, !dragging, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        dock?.activate(self, event: event)
     }
     override func menu(for event: NSEvent) -> NSMenu? { dock?.itemMenu(self) }
     override func mouseDragged(with event: NSEvent) {
-        guard !dragging, hypot(event.locationInWindow.x - mouseDownLocation.x, event.locationInWindow.y - mouseDownLocation.y) > 5 else { return }
+        guard clickArmed, !dragging, hypot(event.locationInWindow.x - mouseDownLocation.x, event.locationInWindow.y - mouseDownLocation.y) > 5 else { return }
         dragging = true
+        clickArmed = false
+        dock?.beginReordering(self)
         let dragItem = NSDraggingItem(pasteboardWriter: DockDragPayload.writer(for: item.url))
         dragItem.setDraggingFrame(icon.frame, contents: icon.image)
         let session = beginDraggingSession(with: [dragItem], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = model.animationsAllowed
     }
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { [.copy, .link] }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { dragging = false }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? [.move, .copy] : [.copy, .link]
+    }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        dock?.endReordering()
+        dragging = false
+        clickArmed = false
+    }
+    func setDragDestination(_ sender: NSDraggingInfo, in view: NSView) {
+        layoutSubtreeIfNeeded()
+        let destination = convert(icon.frame, to: view)
+        sender.enumerateDraggingItems(options: [], for: view, classes: [NSURL.self], searchOptions: [:]) { item, _, _ in
+            item.draggingFrame = destination
+        }
+    }
     override func accessibilityPerformPress() -> Bool { model.open(item); return true }
     func bounce() {
         guard model.animationsAllowed else { return }

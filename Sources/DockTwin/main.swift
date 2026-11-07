@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = DockPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true

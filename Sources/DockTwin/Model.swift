@@ -15,10 +15,11 @@ enum DockEdge: String, Codable, CaseIterable {
 }
 
 struct DockItem: Codable, Identifiable {
-    var id: String { url.standardizedFileURL.path }
+    var id: String { applicationIdentifier.map { "app:\($0)" } ?? url.standardizedFileURL.path }
     let url: URL
     var bookmark: Data?
     var application: Bool?
+    private(set) var applicationIdentifier: String?
     var isApplication: Bool { application ?? (url.pathExtension.lowercased() == "app") }
     var isDirectory: Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && !isApplication
@@ -26,13 +27,17 @@ struct DockItem: Codable, Identifiable {
     var title: String { FileManager.default.displayName(atPath: url.path) }
     init(url: URL, isApplication: Bool? = nil) {
         application = isApplication
-        self.url = url.standardizedFileURL
-        bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let resolved = (try? URL(resolvingAliasFileAt: url, options: [.withoutUI])) ?? url
+        self.url = resolved.resolvingSymlinksInPath().standardizedFileURL
+        if isApplication == true || self.url.pathExtension.lowercased() == "app" {
+            applicationIdentifier = Bundle(url: self.url)?.bundleIdentifier
+        }
+        bookmark = try? self.url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
     }
     func resolved() -> DockItem {
-        guard let bookmark else { return self }
+        guard let bookmark else { return DockItem(url: url, isApplication: application) }
         var stale = false
-        guard let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale) else { return self }
+        guard let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale) else { return DockItem(url: url, isApplication: application) }
         return DockItem(url: resolved, isApplication: application)
     }
 }
@@ -71,10 +76,14 @@ final class DockModel: ObservableObject {
     var onChange: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var subscriptions = Set<AnyCancellable>()
+    private let workspace: NSWorkspace
     private let defaults: UserDefaults
+    private var displayOrder: [String]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, workspace: NSWorkspace = .shared) {
+        self.workspace = workspace
         self.defaults = defaults
+        displayOrder = defaults.stringArray(forKey: "displayOrder") ?? []
         if let data = defaults.data(forKey: "items"), let stored = try? JSONDecoder().decode([DockItem].self, from: data) {
             var seen = Set<String>()
             items = stored.map { $0.resolved() }.filter { seen.insert($0.id).inserted }
@@ -82,12 +91,14 @@ final class DockModel: ObservableObject {
             let paths = ["/System/Library/CoreServices/Finder.app", "/Applications/Safari.app", "/System/Applications/System Settings.app", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads").path]
             items = paths.filter { FileManager.default.fileExists(atPath: $0) }.map { DockItem(url: URL(fileURLWithPath: $0)) }
         }
+        // Earlier versions stored paths as identities; migrate ordering without resetting it.
+        displayOrder = displayOrder.map { $0.hasPrefix("/") ? DockItem(url: URL(fileURLWithPath: $0)).id : $0 }
         preferences = defaults.data(forKey: "preferences").flatMap { try? JSONDecoder().decode(DockPreferences.self, from: $0) } ?? DockPreferences()
         preferences.iconSize = min(80, max(28, preferences.iconSize))
         preferences.magnification = min(2, max(1, preferences.magnification))
         refreshRunning()
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
-            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshRunning() })
+            observers.append(workspace.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshRunning() })
         }
         $items.dropFirst().sink { [weak self] value in
             self?.defaults.set(try? JSONEncoder().encode(value), forKey: "items")
@@ -100,30 +111,54 @@ final class DockModel: ObservableObject {
     }
 
     deinit {
-        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers.forEach { workspace.notificationCenter.removeObserver($0) }
     }
 
     var animationsAllowed: Bool {
-        preferences.animationsEnabled && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        preferences.animationsEnabled && !workspace.accessibilityDisplayShouldReduceMotion
     }
 
     var visibleItems: [DockItem] {
-        guard preferences.showRunning else { return items }
-        var seen = Set(items.map(\.id))
-        let extra = running.compactMap(\.bundleURL)
-            .map { DockItem(url: $0, isApplication: true) }
-            .filter { seen.insert($0.id).inserted }
-        let apps = items.filter(\.isApplication)
-        let files = items.filter { !$0.isApplication }
-        return apps + extra + files
+        var candidates = items
+        if preferences.showRunning {
+            var seen = Set(items.map(\.id))
+            candidates += running.compactMap(\.bundleURL)
+                .map { DockItem(url: $0, isApplication: true) }
+                .filter { seen.insert($0.id).inserted }
+        }
+        var ranks: [String: Int] = [:]
+        for (index, id) in displayOrder.enumerated() where ranks[id] == nil { ranks[id] = index }
+        let ordered = candidates.enumerated().sorted {
+            (ranks[$0.element.id] ?? (displayOrder.count + $0.offset)) <
+                (ranks[$1.element.id] ?? (displayOrder.count + $1.offset))
+        }.map(\.element)
+        return ordered.filter(\.isApplication) + ordered.filter { !$0.isApplication }
+    }
+
+    private func saveDisplayOrder(_ ordered: [DockItem]) {
+        displayOrder = ordered.map(\.id)
+        defaults.set(displayOrder, forKey: "displayOrder")
+    }
+
+    func move(_ item: DockItem, in ordered: [DockItem]) {
+        // Moving a running-only app pins that app, while its neighbours retain their status.
+        let pinned = Set(items.map(\.id)).union([item.id])
+        let visible = Set(ordered.map(\.id))
+        let remaining = items.filter { !visible.contains($0.id) }
+        saveDisplayOrder(ordered + remaining)
+        items = ordered.filter { pinned.contains($0.id) } + remaining
     }
 
     func application(for item: DockItem) -> NSRunningApplication? {
-        running.first { $0.bundleURL?.standardizedFileURL == item.url.standardizedFileURL }
+        running.first {
+            if let identifier = item.applicationIdentifier, $0.bundleIdentifier == identifier { return true }
+            return $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL == item.url
+        }
     }
 
     func add(_ urls: [URL], before target: String? = nil) {
         var updated = items
+        var ordered = visibleItems
         for url in urls where url.isFileURL {
             let isRunning = running.contains { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL }
             let item = DockItem(url: url, isApplication: isRunning ? true : nil)
@@ -131,7 +166,11 @@ final class DockModel: ObservableObject {
             updated.removeAll { $0.id == item.id }
             let index = target.flatMap { target in updated.firstIndex { $0.id == target } } ?? updated.endIndex
             updated.insert(item, at: index)
+            ordered.removeAll { $0.id == item.id }
+            let visibleIndex = target.flatMap { target in ordered.firstIndex { $0.id == target } } ?? ordered.endIndex
+            ordered.insert(item, at: visibleIndex)
         }
+        saveDisplayOrder(ordered)
         items = updated.filter(\.isApplication) + updated.filter { !$0.isApplication }
     }
 
@@ -142,16 +181,26 @@ final class DockModel: ObservableObject {
             if modifiers.contains(.option), let app = application(for: item) {
                 running.filter { $0 != app }.forEach { $0.hide() }
                 app.activate(options: [.activateAllWindows])
-            } else { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+            } else { workspace.activateFileViewerSelecting([item.url]) }
             return
         }
-        if let app = application(for: item) {
-            if modifiers.contains(.option) { app.hide() }
-            else { app.activate(options: [.activateAllWindows]) }
+        if modifiers.contains(.option), let app = application(for: item) {
+            app.hide()
+            return
+        }
+        let completion: (NSRunningApplication?, Error?) -> Void = { _, error in
+            if let error { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
+        }
+        if item.isApplication {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = false
+            configuration.allowsRunningApplicationSubstitution = true
+            // Opening also delivers the normal reopen event to an already-running app.
+            // Activation alone leaves Finder (and other apps) with no visible window.
+            workspace.openApplication(at: item.url, configuration: configuration, completionHandler: completion)
         } else {
-            NSWorkspace.shared.open(item.url, configuration: .init()) { _, error in
-                if let error { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
-            }
+            workspace.open(item.url, configuration: .init(), completionHandler: completion)
         }
     }
 
@@ -167,7 +216,7 @@ final class DockModel: ObservableObject {
     }
 
     private func refreshRunning() {
-        running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        running = workspace.runningApplications.filter { $0.activationPolicy == .regular && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         onChange?()
     }
 }
