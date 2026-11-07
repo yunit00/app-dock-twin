@@ -23,6 +23,7 @@ final class DockView: NSView, NSWindowDelegate {
     private var dragSlotCenters: [CGFloat] = []
     private weak var localDragTile: DockTile?
     private var localDropCommitted = false
+    private var reorderSurface: DockReorderSurface?
     var isDragging: Bool { receivingDrag || tiles.contains { $0.dragging } }
     private var magnification: CGFloat { model.animationsAllowed ? CGFloat(model.preferences.magnification) : 1 }
 
@@ -47,12 +48,6 @@ final class DockView: NSView, NSWindowDelegate {
         registerForDraggedTypes(DockDragPayload.types)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // Keep one destination throughout a local drag, including over icons and controls.
-        if localDragTile != nil, bounds.contains(convert(point, from: superview)) { return self }
-        return super.hitTest(point)
-    }
 
     var isInteracting: Bool { popover?.isShown == true || isDragging }
 
@@ -227,6 +222,13 @@ final class DockView: NSView, NSWindowDelegate {
         dragSlotCenters = tiles.map { model.preferences.edge.vertical ? bounds.height - $0.frame.midY : $0.frame.midX }
         tile.alphaValue = 0
         tile.layoutSubtreeIfNeeded()
+        // AppKit's drag destination selection is independent of ordinary mouse hit testing.
+        // A registered topmost surface keeps child views from claiming the final drop.
+        let surface = DockReorderSurface(frame: bounds)
+        surface.dock = self
+        surface.autoresizingMask = [.width, .height]
+        addSubview(surface, positioned: .above, relativeTo: nil)
+        reorderSurface = surface
     }
 
     func previewReordering(at point: NSPoint) {
@@ -266,6 +268,8 @@ final class DockView: NSView, NSWindowDelegate {
 
     func endReordering() {
         if !localDropCommitted { restoreReordering() }
+        reorderSurface?.removeFromSuperview()
+        reorderSurface = nil
         localDragTile?.alphaValue = 1
         originalDragTiles = nil
         dragSlotCenters = []
@@ -329,6 +333,23 @@ final class DockView: NSView, NSWindowDelegate {
         return true
     }
 
+}
+
+final class DockReorderSurface: NSView {
+    weak var dock: DockView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes(DockDragPayload.types)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { dock?.draggingEntered(sender) ?? [] }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { dock?.draggingUpdated(sender) ?? [] }
+    override func draggingExited(_ sender: NSDraggingInfo?) { dock?.draggingExited(sender) }
+    override func draggingEnded(_ sender: NSDraggingInfo) { dock?.draggingEnded(sender) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { dock?.prepareForDragOperation(sender) ?? false }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { dock?.performDragOperation(sender) ?? false }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { dock?.concludeDragOperation(sender) }
 }
 
 final class DockTile: NSView, NSDraggingSource {

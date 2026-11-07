@@ -214,14 +214,22 @@ final class DockModelTests {
                 let point = edge.vertical
                     ? NSPoint(x: view.bounds.width * fraction, y: target.midY)
                     : NSPoint(x: target.midX, y: view.bounds.height * fraction)
-                expectTrue(view.hitTest(point) === view)
+                expectTrue(view.hitTest(point) is DockReorderSurface)
                 view.trackLocalDrag(at: point)
                 expectTrue(edge.vertical ? source.frame.midY < tiles[1].frame.midY : source.frame.midX > tiles[1].frame.midX)
                 view.trackLocalDrag(at: NSPoint(x: -20, y: -20))
                 expectTrue(edge.vertical ? source.frame.midY > tiles[1].frame.midY : source.frame.midX < tiles[1].frame.midX)
-                view.trackLocalDrag(at: point)
-                view.commitReordering()
+                let surface = view.subviews.last as! DockReorderSurface
+                expectTrue(surface.registeredDraggedTypes.contains(.fileURL))
+                let drag = TestDraggingInfo(source: source, point: point)
+                expectEqual(surface.draggingEntered(drag), .move)
+                expectEqual(surface.draggingUpdated(drag), .move)
+                expectTrue(surface.prepareForDragOperation(drag))
+                expectTrue(surface.performDragOperation(drag))
+                surface.draggingEnded(drag)
                 view.endReordering()
+                expectTrue(!view.subviews.contains { $0 is DockReorderSurface })
+                expectEqual(DockModel(defaults: defaults).items.map(\.id), [apps[1].id, apps[2].id, apps[0].id])
                 expectEqual(model.items.map(\.id), [apps[1].id, apps[2].id, apps[0].id])
                 expectTrue(view.hitTest(NSPoint(x: source.frame.midX, y: source.frame.midY)) === source)
             }
@@ -388,4 +396,30 @@ final class RecordingWorkspace: NSWorkspace {
         openedURL = applicationURL
         self.configuration = configuration
     }
+}
+
+final class TestDraggingInfo: NSObject, NSDraggingInfo {
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { [.move, .copy] }
+    let draggingLocation: NSPoint
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    let draggingPasteboard = NSPasteboard.withUniqueName()
+    let draggingSource: Any?
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    init(source: DockTile, point: NSPoint) {
+        draggingSource = source
+        draggingLocation = point
+        super.init()
+        draggingPasteboard.writeObjects([DockDragPayload.writer(for: source.item.url)])
+    }
+    deinit { draggingPasteboard.releaseGlobally() }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions, for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }
