@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var timer: Timer?
     private var hidden = false
+    private var refreshPending = false
     private var visibleFrame = NSRect.zero
     private var lastInside = Date()
     private var screen: NSScreen? {
@@ -59,6 +60,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refresh() {
+        guard !dock.isDragging else {
+            refreshPending = true
+            return
+        }
+        refreshPending = false
         guard let screen else { return }
         let edge = model.preferences.edge
         let area = screen.visibleFrame.insetBy(dx: 8, dy: 8)
@@ -79,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateVisibility() {
+        if refreshPending && !dock.isDragging { refresh() }
         guard let screen else { return }
         guard model.preferences.autoHide else {
             if hidden { setHidden(false) }
@@ -115,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .right: target.origin.x += amount
         }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
+            context.duration = model.animationsAllowed ? 0.2 : 0
             panel.animator().alphaValue = value ? 0 : 1
             panel.animator().setFrame(value ? target : visibleFrame, display: true)
         }
@@ -125,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 430), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 480), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Dock Twin"
             window.contentViewController = NSHostingController(rootView: SettingsView(model: model))
             window.isReleasedWhenClosed = false

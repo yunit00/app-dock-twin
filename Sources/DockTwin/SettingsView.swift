@@ -17,22 +17,24 @@ struct SettingsView: View {
             }
             Section("Внешний вид") {
                 Slider(value: $model.preferences.iconSize, in: 28...80, step: 1) {
-                    Text("Размер иконок · \(Int(model.preferences.iconSize))")
+                    Text("Масштаб · \(Int(model.preferences.iconSize / 48 * 100)) %")
                 }
+                Toggle("Анимации", isOn: $model.preferences.animationsEnabled)
                 Slider(value: $model.preferences.magnification, in: 1...2, step: 0.05) {
                     Text("Увеличение · \(model.preferences.magnification, specifier: "%.2f")×")
                 }
+                .disabled(!model.preferences.animationsEnabled)
                 Toggle("Показывать запущенные приложения", isOn: $model.preferences.showRunning)
             }
             Section("Содержимое") {
                 Button("Добавить приложения, файлы или папки…") { model.chooseItems() }
-                Text("Перетащите объект из Finder на панель. Чтобы изменить порядок, перетащите иконку на другую. Удаление доступно в контекстном меню.")
+                Text("Перетащите объект из Finder или системного Dock на панель. Чтобы изменить порядок, перетащите иконку на другую. Удаление доступно в контекстном меню.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .padding(12)
-        .frame(width: 470, height: 430)
+        .frame(width: 470, height: 480)
     }
 }
 

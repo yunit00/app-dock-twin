@@ -74,6 +74,59 @@ final class DockModelTests {
             }
         }
     }
+    func testDropOntoUnpinnedRunningItemPinsIt() {
+        let model = emptyModel()
+        let url = URL(fileURLWithPath: "/Applications/Example.app")
+        model.add([url], before: url.path)
+        expectEqual(model.items.map(\.url), [url])
+    }
+    func testOldPreferencesSurviveNewAnimationSetting() throws {
+        let data = Data(#"{"edge":"left","iconSize":64,"magnification":1.8,"autoHide":true,"showRunning":false,"screenID":"123"}"#.utf8)
+        defaults.set(data, forKey: "preferences")
+        let model = DockModel(defaults: defaults)
+        expectEqual(model.preferences.edge, .left)
+        expectEqual(model.preferences.iconSize, 64)
+        expectEqual(model.preferences.screenID, "123")
+        expectTrue(model.preferences.autoHide)
+        expectTrue(model.preferences.animationsEnabled)
+        model.preferences.animationsEnabled = false
+        let restored = DockModel(defaults: defaults)
+        expectTrue(!restored.preferences.animationsEnabled)
+        expectTrue(!restored.animationsAllowed)
+    }
+    func testDockPasteboardCompatibility() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let url = URL(fileURLWithPath: "/Applications/An App.app")
+        pasteboard.writeObjects([DockDragPayload.writer(for: url)])
+        expectEqual(DockDragPayload.urls(from: pasteboard), [url])
+        expectEqual(pasteboard.propertyList(forType: DockDragPayload.filenames) as? [String], [url.path])
+        pasteboard.clearContents()
+        pasteboard.setPropertyList([url.path, "/tmp/Папка с файлами", "relative/path"], forType: DockDragPayload.filenames)
+        expectEqual(DockDragPayload.urls(from: pasteboard), [url, URL(fileURLWithPath: "/tmp/Папка с файлами")])
+        pasteboard.clearContents()
+        pasteboard.setString("https://example.com", forType: .URL)
+        expectTrue(DockDragPayload.urls(from: pasteboard).isEmpty)
+        expectEqual(DockDragPayload.operation(for: [.link, .move]), .link)
+        expectEqual(DockDragPayload.operation(for: [.move]), .move)
+        expectEqual(DockDragPayload.operation(for: [.delete]), [])
+    }
+    func testSettingsButtonOnEveryEdge() {
+        _ = NSApplication.shared
+        let model = emptyModel()
+        let view = DockView(model: model)
+        var opened = false
+        view.showSettings = { opened = true }
+        for edge in DockEdge.allCases {
+            model.preferences.edge = edge
+            _ = view.rebuild(maxLength: 700)
+            let button = view.subviews.compactMap { $0 as? NSButton }.first!
+            expectTrue(view.bounds.contains(button.frame))
+            button.performClick(nil)
+            expectTrue(opened)
+            opened = false
+        }
+    }
     func testRemoteURLsAreIgnored() {
         let model = emptyModel()
         model.add([URL(string: "https://example.com")!])
@@ -98,7 +151,11 @@ extension DockModelTests {
             ("settings bounds", tests.testPreferencesAreClamped),
             ("remote URL rejection", tests.testRemoteURLsAreIgnored),
             ("application type persistence", tests.testRunningApplicationHintSurvivesPersistence),
-            ("four-edge layout bounds", tests.testLayoutFitsEveryEdge)
+            ("four-edge layout bounds", tests.testLayoutFitsEveryEdge),
+            ("old settings migration and animation persistence", tests.testOldPreferencesSurviveNewAnimationSetting),
+            ("Dock pasteboard compatibility", tests.testDockPasteboardCompatibility),
+            ("settings button on every edge", tests.testSettingsButtonOnEveryEdge),
+            ("pin when dropped on unpinned item", tests.testDropOntoUnpinnedRunningItemPinsIt)
         ]
         for (name, test) in cases {
             tests.setUp()

@@ -44,6 +44,24 @@ struct DockPreferences: Codable {
     var autoHide = false
     var showRunning = true
     var screenID: String = "main"
+    var animationsEnabled = true
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case edge, iconSize, magnification, autoHide, showRunning, screenID, animationsEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        edge = try values.decodeIfPresent(DockEdge.self, forKey: .edge) ?? .right
+        iconSize = try values.decodeIfPresent(Double.self, forKey: .iconSize) ?? 48
+        magnification = try values.decodeIfPresent(Double.self, forKey: .magnification) ?? 1.6
+        autoHide = try values.decodeIfPresent(Bool.self, forKey: .autoHide) ?? false
+        showRunning = try values.decodeIfPresent(Bool.self, forKey: .showRunning) ?? true
+        screenID = try values.decodeIfPresent(String.self, forKey: .screenID) ?? "main"
+        animationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .animationsEnabled) ?? true
+    }
 }
 
 final class DockModel: ObservableObject {
@@ -85,6 +103,10 @@ final class DockModel: ObservableObject {
         observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
     }
 
+    var animationsAllowed: Bool {
+        preferences.animationsEnabled && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     var visibleItems: [DockItem] {
         guard preferences.showRunning else { return items }
         var seen = Set(items.map(\.id))
@@ -105,7 +127,7 @@ final class DockModel: ObservableObject {
         for url in urls where url.isFileURL {
             let isRunning = running.contains { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL }
             let item = DockItem(url: url, isApplication: isRunning ? true : nil)
-            guard item.id != target else { continue }
+            if item.id == target && updated.contains(where: { $0.id == item.id }) { continue }
             updated.removeAll { $0.id == item.id }
             let index = target.flatMap { target in updated.firstIndex { $0.id == target } } ?? updated.endIndex
             updated.insert(item, at: index)
@@ -147,5 +169,42 @@ final class DockModel: ObservableObject {
     private func refreshRunning() {
         running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         onChange?()
+    }
+}
+
+// Dock and older AppKit sources can publish filename lists instead of file URLs.
+enum DockDragPayload {
+    static let filenames = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+    static let types: [NSPasteboard.PasteboardType] = [.fileURL, .URL, filenames]
+
+    static func urls(from pasteboard: NSPasteboard) -> [URL] {
+        var urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        if let paths = pasteboard.propertyList(forType: filenames) as? [String] {
+            urls += paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
+        }
+        for item in pasteboard.pasteboardItems ?? [] {
+            for type in [NSPasteboard.PasteboardType.fileURL, .URL] {
+                if let value = item.string(forType: type), let url = URL(string: value), url.isFileURL {
+                    urls.append(url)
+                }
+            }
+        }
+        var seen = Set<String>()
+        return urls.filter { $0.isFileURL && $0.path.hasPrefix("/") }
+            .map(\.standardizedFileURL).filter { seen.insert($0.path).inserted }
+    }
+
+    static func writer(for url: URL) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setString(url.absoluteString, forType: .fileURL)
+        item.setString(url.absoluteString, forType: .URL)
+        return item
+    }
+
+    static func operation(for mask: NSDragOperation) -> NSDragOperation {
+        for operation: NSDragOperation in [.copy, .link, .move, .generic] where mask.contains(operation) {
+            return operation
+        }
+        return []
     }
 }

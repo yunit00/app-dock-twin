@@ -14,6 +14,11 @@ final class DockView: NSView {
     private let spacing: CGFloat = 5
     private var menuActions: [() -> Void] = []
     private var separator = NSView()
+    private let settingsButton = NSButton()
+    private let settingsExtent: CGFloat = 38
+    private var receivingDrag = false
+    var isDragging: Bool { receivingDrag || tiles.contains { $0.dragging } }
+    private var magnification: CGFloat { model.animationsAllowed ? CGFloat(model.preferences.magnification) : 1 }
 
     init(model: DockModel) {
         self.model = model
@@ -30,11 +35,21 @@ final class DockView: NSView {
         separator.wantsLayer = true
         separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
         glass.addSubview(separator)
-        registerForDraggedTypes([.fileURL])
+        settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Настройки Dock Twin")
+        settingsButton.bezelStyle = .regularSquare
+        settingsButton.isBordered = false
+        settingsButton.imagePosition = .imageOnly
+        settingsButton.contentTintColor = .secondaryLabelColor
+        settingsButton.toolTip = "Настройки Dock Twin"
+        settingsButton.setAccessibilityLabel("Настройки Dock Twin")
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
+        addSubview(settingsButton)
+        registerForDraggedTypes(DockDragPayload.types)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    var isInteracting: Bool { popover?.isShown == true || tiles.contains { $0.dragging } }
+    var isInteracting: Bool { popover?.isShown == true || isDragging }
 
     func rebuild(maxLength: CGFloat) -> NSSize {
         pointer = nil
@@ -46,9 +61,9 @@ final class DockView: NSView {
             return tile
         }
         let count = CGFloat(max(tiles.count, 1))
-        baseSize = min(CGFloat(model.preferences.iconSize), max(16, (maxLength - 2 * padding - 18) / count - spacing))
-        let length = min(maxLength, max(100, count * (baseSize + spacing) + 2 * padding + 18))
-        let depth = baseSize * CGFloat(model.preferences.magnification) + 50
+        baseSize = min(CGFloat(model.preferences.iconSize), max(16, (maxLength - settingsExtent - 2 * padding - 18) / count - spacing))
+        let length = min(maxLength, max(100, count * (baseSize + spacing) + 2 * padding + 18 + settingsExtent))
+        let depth = baseSize * magnification + 50
         let size = model.preferences.edge.vertical ? NSSize(width: depth, height: length) : NSSize(width: length, height: depth)
         setFrameSize(size)
         layoutTiles(animated: false)
@@ -86,7 +101,11 @@ final class DockView: NSView {
         let section = tiles.firstIndex { !$0.item.isApplication }
         let hasDivider = section.map { $0 > 0 } ?? false
         let baselineLength = CGFloat(tiles.count) * (baseSize + spacing) - spacing + (hasDivider ? 14 : 0)
-        let available = vertical ? bounds.height : bounds.width
+        let available = (vertical ? bounds.height : bounds.width) - settingsExtent
+        let buttonSize: CGFloat = 28
+        settingsButton.frame = vertical
+            ? NSRect(x: glassFrame.midX - buttonSize / 2, y: 9, width: buttonSize, height: buttonSize)
+            : NSRect(x: bounds.width - settingsExtent + 1, y: glassFrame.midY - buttonSize / 2, width: buttonSize, height: buttonSize)
         let start = (available - baselineLength) / 2
         let cursor = pointer.map { vertical ? bounds.height - $0.y : $0.x }
         var sizes: [CGFloat] = []
@@ -95,7 +114,7 @@ final class DockView: NSView {
             let distance = cursor.map { abs($0 - center) } ?? .infinity
             let influence = max(0, 1 - distance / (baseSize * 2.5))
             let smooth = (1 - cos(influence * .pi)) / 2
-            sizes.append(baseSize * (1 + (CGFloat(model.preferences.magnification) - 1) * smooth))
+            sizes.append(baseSize * (1 + (magnification - 1) * smooth))
         }
         let expanded = sizes.reduce(0, +) + CGFloat(max(0, tiles.count - 1)) * spacing + (hasDivider ? 14 : 0)
         // Keep the magnified row inside the display even when many apps are running.
@@ -105,7 +124,7 @@ final class DockView: NSView {
         var offset = (available - total) / 2
         separator.isHidden = !hasDivider
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.12 : 0
+            context.duration = animated && model.animationsAllowed ? 0.12 : 0
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             for (index, tile) in tiles.enumerated() {
                 if hasDivider && index == section {
@@ -133,6 +152,7 @@ final class DockView: NSView {
         if tile.item.isDirectory && event.modifierFlags.intersection([.command, .option]).isEmpty {
             let popover = NSPopover()
             popover.behavior = .transient
+            popover.animates = model.animationsAllowed
             popover.contentViewController = NSHostingController(rootView: FolderView(url: tile.item.url) { [weak self] url in
                 self?.popover?.close()
                 self?.model.open(DockItem(url: url))
@@ -188,18 +208,37 @@ final class DockView: NSView {
         menuActions.append(action)
         menu.addItem(item)
     }
+    @objc private func openSettings() { showSettings?() }
     @objc private func runMenuAction(_ sender: NSMenuItem) { menuActions[sender.tag]() }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let operation = acceptedOperation(sender)
+        receivingDrag = !operation.isEmpty
+        glass.layer?.borderColor = (receivingDrag ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.32)).cgColor
+        return operation
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { acceptedOperation(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { finishDrop() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { finishDrop() }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !acceptedOperation(sender).isEmpty }
+    private func acceptedOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty else { return [] }
+        return DockDragPayload.operation(for: sender.draggingSourceOperationMask)
+    }
+    private func finishDrop() {
+        receivingDrag = false
+        glass.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
+    }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
+        defer { finishDrop() }
+        let urls = DockDragPayload.urls(from: sender.draggingPasteboard)
+        guard !urls.isEmpty, !acceptedOperation(sender).isEmpty else { return false }
         let point = convert(sender.draggingLocation, from: nil)
         let target = tiles.first { $0.frame.contains(point) }?.item.id
         model.add(urls, before: target)
         return true
     }
+
 }
 
 final class DockTile: NSView, NSDraggingSource {
@@ -259,15 +298,16 @@ final class DockTile: NSView, NSDraggingSource {
     override func mouseDragged(with event: NSEvent) {
         guard !dragging, hypot(event.locationInWindow.x - mouseDownLocation.x, event.locationInWindow.y - mouseDownLocation.y) > 5 else { return }
         dragging = true
-        let dragItem = NSDraggingItem(pasteboardWriter: item.url as NSURL)
+        let dragItem = NSDraggingItem(pasteboardWriter: DockDragPayload.writer(for: item.url))
         dragItem.setDraggingFrame(icon.frame, contents: icon.image)
-        beginDraggingSession(with: [dragItem], event: event, source: self)
+        let session = beginDraggingSession(with: [dragItem], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = model.animationsAllowed
     }
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { [.copy, .link] }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { dragging = false }
     override func accessibilityPerformPress() -> Bool { model.open(item); return true }
     func bounce() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard model.animationsAllowed else { return }
         let animation = CAKeyframeAnimation(keyPath: model.preferences.edge.vertical ? "transform.translation.x" : "transform.translation.y")
         let sign: CGFloat = (model.preferences.edge == .right || model.preferences.edge == .top) ? -1 : 1
         animation.values = [0, 12 * sign, 0, 5 * sign, 0]
