@@ -12,7 +12,6 @@ final class DockModelTests {
     private func emptyModel() -> DockModel {
         let model = DockModel(defaults: defaults)
         model.items = []
-        model.preferences.showRunning = false
         return model
     }
     func testAddingDeduplicatesAndKeepsApplicationsBeforeFiles() {
@@ -248,19 +247,29 @@ final class DockModelTests {
         expectEqual(model.items[0].id, "app:" + bundleID)
         let finder = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == "com.apple.finder" }!
         let finderItem = DockItem(url: finder.bundleURL!)
+        // A saved preference from 0.1.0 must not re-enable automatic membership.
+        defaults.set(Data(#"{"showRunning":true}"#.utf8), forKey: "preferences")
+        let migrated = DockModel(defaults: defaults)
+        migrated.items = []
+        migrated.running = [finder]
+        expectTrue(migrated.visibleItems.isEmpty)
+        migrated.add([finderItem.url])
+        expectEqual(migrated.visibleItems.map(\.id), [finderItem.id])
+        expectEqual(migrated.application(for: finderItem)?.processIdentifier, finder.processIdentifier)
+        migrated.remove(finderItem)
+        expectTrue(migrated.visibleItems.isEmpty)
         model.items = [finderItem]
         model.running = [finder]
-        model.preferences.showRunning = true
         expectEqual(model.visibleItems.count, 1)
         expectEqual(model.application(for: finderItem)?.processIdentifier, finder.processIdentifier)
         let other = DockItem(url: first)
         model.items = [other]
         model.move(other, in: [finderItem, other])
-        expectEqual(model.visibleItems.map(\.id), [finderItem.id, other.id])
+        expectEqual(model.visibleItems.map(\.id), [other.id])
         expectEqual(model.items.map(\.id), [other.id])
         let restored = DockModel(defaults: defaults)
         restored.running = [finder]
-        expectEqual(restored.visibleItems.map(\.id), [finderItem.id, other.id])
+        expectEqual(restored.visibleItems.map(\.id), [other.id])
     }
 
     func testFinderClickUsesApplicationReopen() {
@@ -278,7 +287,6 @@ final class DockModelTests {
         _ = NSApplication.shared
         let workspace = RecordingWorkspace()
         let model = DockModel(defaults: defaults, workspace: workspace)
-        model.preferences.showRunning = false
         model.items = [DockItem(url: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))]
         let view = DockView(model: model)
         _ = view.rebuild(maxLength: 700)

@@ -26,11 +26,10 @@ struct SettingsView: View {
                     Text("Увеличение · \(model.preferences.magnification, specifier: "%.2f")×")
                 }
                 .disabled(!model.preferences.animationsEnabled)
-                Toggle("Показывать запущенные приложения", isOn: $model.preferences.showRunning)
             }
             Section("Содержимое") {
                 Button("Добавить приложения, файлы или папки…") { model.chooseItems() }
-                Text("Перетащите приложение, файл или папку из Finder. Чтобы изменить порядок, тяните иконку вдоль панели до нужного места. Удаление доступно в контекстном меню.")
+                Text("Здесь отображаются только закреплённые объекты. Точка под приложением означает, что оно запущено. Перетащите приложение, файл или папку из Finder. Чтобы изменить порядок, тяните иконку вдоль панели до нужного места. Удаление доступно в контекстном меню.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

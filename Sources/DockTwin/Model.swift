@@ -48,7 +48,6 @@ struct DockPreferences: Codable {
     var magnification: Double = 1.6
     var autoHide = false
     var desktopOnly = true
-    var showRunning = true
     var screenID: String = "main"
     var animationsEnabled = true
 
@@ -59,7 +58,7 @@ struct DockPreferences: Codable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case edge, iconSize, magnification, autoHide, desktopOnly, showRunning, screenID, animationsEnabled
+        case edge, iconSize, magnification, autoHide, desktopOnly, screenID, animationsEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -69,7 +68,6 @@ struct DockPreferences: Codable {
         magnification = try values.decodeIfPresent(Double.self, forKey: .magnification) ?? 1.6
         autoHide = try values.decodeIfPresent(Bool.self, forKey: .autoHide) ?? false
         desktopOnly = try values.decodeIfPresent(Bool.self, forKey: .desktopOnly) ?? true
-        showRunning = try values.decodeIfPresent(Bool.self, forKey: .showRunning) ?? true
         screenID = try values.decodeIfPresent(String.self, forKey: .screenID) ?? "main"
         animationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .animationsEnabled) ?? true
     }
@@ -125,16 +123,10 @@ final class DockModel: ObservableObject {
     }
 
     var visibleItems: [DockItem] {
-        var candidates = items
-        if preferences.showRunning {
-            var seen = Set(items.map(\.id))
-            candidates += running.compactMap(\.bundleURL)
-                .map { DockItem(url: $0, isApplication: true) }
-                .filter { seen.insert($0.id).inserted }
-        }
+        // Running applications supply indicators only; membership is explicitly managed.
         var ranks: [String: Int] = [:]
         for (index, id) in displayOrder.enumerated() where ranks[id] == nil { ranks[id] = index }
-        let ordered = candidates.enumerated().sorted {
+        let ordered = items.enumerated().sorted {
             (ranks[$0.element.id] ?? (displayOrder.count + $0.offset)) <
                 (ranks[$1.element.id] ?? (displayOrder.count + $1.offset))
         }.map(\.element)
