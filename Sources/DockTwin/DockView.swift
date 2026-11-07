@@ -4,13 +4,13 @@ import SwiftUI
 final class DockView: NSView {
     let model: DockModel
     var showSettings: (() -> Void)?
-    private let glass = NSVisualEffectView()
+    private let glass = DockBackgroundView()
     private var tiles: [DockTile] = []
     private var tracking: NSTrackingArea?
     private var popover: NSPopover?
     private var baseSize: CGFloat = 48
     private var pointer: NSPoint?
-    private let padding: CGFloat = 12
+    private let padding: CGFloat = 8
     private let spacing: CGFloat = 5
     private var menuActions: [() -> Void] = []
     private var separator = NSView()
@@ -24,17 +24,10 @@ final class DockView: NSView {
         self.model = model
         super.init(frame: .zero)
         wantsLayer = true
-        glass.material = .hudWindow
-        glass.blendingMode = .behindWindow
-        glass.state = .active
-        glass.wantsLayer = true
-        glass.layer?.cornerRadius = 23
-        glass.layer?.borderWidth = 0.75
-        glass.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
         addSubview(glass)
         separator.wantsLayer = true
         separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
-        glass.addSubview(separator)
+        addSubview(separator)
         settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Настройки Dock Twin")
         settingsButton.bezelStyle = .regularSquare
         settingsButton.isBordered = false
@@ -89,7 +82,7 @@ final class DockView: NSView {
     private func layoutTiles(animated: Bool) {
         let edge = model.preferences.edge
         let vertical = edge.vertical
-        let depth = baseSize + 22
+        let depth = baseSize + 12
         let glassFrame: NSRect
         switch edge {
         case .bottom: glassFrame = NSRect(x: 0, y: 0, width: bounds.width, height: depth)
@@ -98,6 +91,7 @@ final class DockView: NSView {
         case .right: glassFrame = NSRect(x: bounds.width - depth, y: 0, width: depth, height: bounds.height)
         }
         glass.frame = glassFrame
+        glass.cornerRadius = depth * 0.3
         let section = tiles.firstIndex { !$0.item.isApplication }
         let hasDivider = section.map { $0 > 0 } ?? false
         let baselineLength = CGFloat(tiles.count) * (baseSize + spacing) - spacing + (hasDivider ? 14 : 0)
@@ -131,16 +125,16 @@ final class DockView: NSView {
                     let line = vertical
                         ? NSRect(x: glassFrame.minX + 10, y: bounds.height - offset - 7, width: depth - 20, height: 1)
                         : NSRect(x: offset + 7, y: glassFrame.minY + 10, width: 1, height: depth - 20)
-                    separator.frame = convert(line, to: glass)
+                    separator.frame = line
                     offset += 14
                 }
                 let size = sizes[index]
                 let rect: NSRect
                 switch edge {
-                case .bottom: rect = NSRect(x: offset, y: 10, width: size, height: size + 8)
-                case .top: rect = NSRect(x: offset, y: bounds.height - size - 18, width: size, height: size + 8)
-                case .left: rect = NSRect(x: 10, y: bounds.height - offset - size, width: size + 8, height: size)
-                case .right: rect = NSRect(x: bounds.width - size - 18, y: bounds.height - offset - size, width: size + 8, height: size)
+                case .bottom: rect = NSRect(x: offset, y: 6, width: size, height: size)
+                case .top: rect = NSRect(x: offset, y: bounds.height - size - 6, width: size, height: size)
+                case .left: rect = NSRect(x: 6, y: bounds.height - offset - size, width: size, height: size)
+                case .right: rect = NSRect(x: bounds.width - size - 6, y: bounds.height - offset - size, width: size, height: size)
                 }
                 tile.animator().frame = rect
                 offset += size + spacing
@@ -214,7 +208,7 @@ final class DockView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let operation = acceptedOperation(sender)
         receivingDrag = !operation.isEmpty
-        glass.layer?.borderColor = (receivingDrag ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.32)).cgColor
+        glass.dropHighlighted = receivingDrag
         return operation
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { acceptedOperation(sender) }
@@ -227,7 +221,7 @@ final class DockView: NSView {
     }
     private func finishDrop() {
         receivingDrag = false
-        glass.layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
+        glass.dropHighlighted = false
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { finishDrop() }
@@ -260,8 +254,8 @@ final class DockTile: NSView, NSDraggingSource {
         icon.wantsLayer = true
         addSubview(icon)
         indicator.wantsLayer = true
-        indicator.layer?.cornerRadius = 2
-        indicator.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.7).cgColor
+        indicator.layer?.cornerRadius = 1.5
+        indicator.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
         indicator.isHidden = model.application(for: item) == nil
         addSubview(indicator)
         toolTip = item.title
@@ -274,22 +268,21 @@ final class DockTile: NSView, NSDraggingSource {
     override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
     override func layout() {
         super.layout()
-        let edge = model.preferences.edge
-        switch edge {
+        icon.frame = bounds
+        // The icon's transparent inset accommodates the running dot without a separate lane.
+        let diameter: CGFloat = 3
+        switch model.preferences.edge {
         case .bottom:
-            icon.frame = NSRect(x: 0, y: 8, width: bounds.width, height: bounds.height - 8)
-            indicator.frame = NSRect(x: bounds.midX - 2, y: 1, width: 4, height: 4)
+            indicator.frame = NSRect(x: bounds.midX - diameter / 2, y: 0, width: diameter, height: diameter)
         case .top:
-            icon.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - 8)
-            indicator.frame = NSRect(x: bounds.midX - 2, y: bounds.height - 5, width: 4, height: 4)
+            indicator.frame = NSRect(x: bounds.midX - diameter / 2, y: bounds.height - diameter, width: diameter, height: diameter)
         case .left:
-            icon.frame = NSRect(x: 8, y: 0, width: bounds.width - 8, height: bounds.height)
-            indicator.frame = NSRect(x: 1, y: bounds.midY - 2, width: 4, height: 4)
+            indicator.frame = NSRect(x: 0, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
         case .right:
-            icon.frame = NSRect(x: 0, y: 0, width: bounds.width - 8, height: bounds.height)
-            indicator.frame = NSRect(x: bounds.width - 5, y: bounds.midY - 2, width: 4, height: 4)
+            indicator.frame = NSRect(x: bounds.width - diameter, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
         }
     }
+
     override func mouseDown(with event: NSEvent) { mouseDownLocation = event.locationInWindow }
     override func mouseUp(with event: NSEvent) {
         if !dragging { dock?.activate(self, event: event) }
@@ -313,5 +306,52 @@ final class DockTile: NSView, NSDraggingSource {
         animation.values = [0, 12 * sign, 0, 5 * sign, 0]
         animation.duration = 0.5
         icon.layer?.add(animation, forKey: "launch")
+    }
+}
+
+/// Native glass on Tahoe, with a system vibrancy material on earlier macOS versions.
+final class DockBackgroundView: NSView {
+    private let effect: NSView
+    var cornerRadius: CGFloat = 12 {
+        didSet { updateShape() }
+    }
+    var dropHighlighted = false {
+        didSet { layer?.borderWidth = dropHighlighted ? 1.5 : 0 }
+    }
+
+    override init(frame: NSRect) {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .clear
+            effect = glass
+        } else {
+            let blur = NSVisualEffectView()
+            blur.material = .sidebar
+            blur.blendingMode = .behindWindow
+            blur.state = .active
+            blur.wantsLayer = true
+            blur.layer?.masksToBounds = true
+            effect = blur
+        }
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.borderColor = NSColor.controlAccentColor.cgColor
+        addSubview(effect)
+        updateShape()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() {
+        super.layout()
+        effect.frame = bounds
+    }
+    private func updateShape() {
+        layer?.cornerCurve = .continuous
+        layer?.cornerRadius = cornerRadius
+        if #available(macOS 26.0, *), let glass = effect as? NSGlassEffectView {
+            glass.cornerRadius = cornerRadius
+        } else {
+            effect.layer?.cornerCurve = .continuous
+            effect.layer?.cornerRadius = cornerRadius
+        }
     }
 }
