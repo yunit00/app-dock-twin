@@ -1,0 +1,3 @@
+Generated with the built-in image_gen tool, with transparent_background enabled.
+
+Use case: logo-brand. Create a polished macOS application icon for Dock Twin, a second Dock panel. Square 1024x1024 icon asset, a rounded-square glass tile with two parallel floating dock shelves, each containing three simple rounded app tiles. Distinctive, minimal, dimensional translucent glass with crisp edges and soft studio highlights, strong silhouette readable at 32px. Centered front view with subtle depth. Keep a small equal transparent margin outside the rounded-square silhouette. No lettering, no Apple logo, no watermark. Actual transparent background outside the icon.
