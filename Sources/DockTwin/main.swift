@@ -24,8 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         panel = DockPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isFloatingPanel = true
-        panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -69,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         refreshPending = false
         guard let screen else { return }
+        panel.isFloatingPanel = !model.preferences.desktopOnly
+        panel.level = model.preferences.panelLevel
         let edge = model.preferences.edge
         let area = screen.visibleFrame.insetBy(dx: 8, dy: 8)
         let size = dock.rebuild(maxLength: edge.vertical ? area.height : area.width)
@@ -135,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 480), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Dock Twin"
             window.contentViewController = NSHostingController(rootView: SettingsView(model: model))
             window.isReleasedWhenClosed = false

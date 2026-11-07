@@ -265,6 +265,19 @@ final class DockModelTests {
         tile.mouseUp(with: up)
         expectEqual(workspace.openCount, 1)
     }
+    func testDesktopModeMigrationAndLayer() throws {
+        defaults.set(Data(#"{"edge":"left","autoHide":true,"iconSize":36}"#.utf8), forKey: "preferences")
+        let model = DockModel(defaults: defaults)
+        expectTrue(model.preferences.desktopOnly)
+        expectEqual(model.preferences.iconSize, 36)
+        expectTrue(model.preferences.autoHide)
+        expectTrue(model.preferences.panelLevel.rawValue < NSWindow.Level.normal.rawValue)
+        expectTrue(model.preferences.panelLevel.rawValue > Int(CGWindowLevelForKey(.desktopIconWindow)))
+        model.preferences.desktopOnly = false
+        let restored = DockModel(defaults: defaults)
+        expectTrue(!restored.preferences.desktopOnly)
+        expectEqual(restored.preferences.panelLevel, .floating)
+    }
     func testRemoteURLsAreIgnored() {
         let model = emptyModel()
         model.add([URL(string: "https://example.com")!])
@@ -298,7 +311,8 @@ extension DockModelTests {
             ("reorder preview, commit, cancel, section boundaries", tests.testAnimatedReorderingCommitsAndCancelsOnEveryEdge),
             ("application identity migration and running deduplication", tests.testApplicationIdentityMigrationAndRunningDeduplication),
             ("Finder click reopens the application", tests.testFinderClickUsesApplicationReopen),
-            ("mouse release after drag never launches an app", tests.testMouseReleaseAfterDragDoesNotLaunchApplication)
+            ("mouse release after drag never launches an app", tests.testMouseReleaseAfterDragDoesNotLaunchApplication),
+            ("desktop mode migration, layer and persistence", tests.testDesktopModeMigrationAndLayer)
         ]
         for (name, test) in cases {
             tests.setUp()

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import OSLog
 
 final class DockView: NSView, NSWindowDelegate {
     let model: DockModel
@@ -16,6 +17,7 @@ final class DockView: NSView, NSWindowDelegate {
     private var separator = NSView()
     private let settingsButton = NSButton()
     private let settingsExtent: CGFloat = 38
+    private let dragLogger = Logger(subsystem: "com.yunit.docktwin", category: "drag")
     private var receivingDrag = false
     private var originalDragTiles: [DockTile]?
     private var dragSlotCenters: [CGFloat] = []
@@ -257,6 +259,11 @@ final class DockView: NSView, NSWindowDelegate {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let types = sender.draggingPasteboard.types?.map(\.rawValue).joined(separator: ",") ?? "none"
+        dragLogger.notice("Drag entered. Types: \(types, privacy: .public), source mask: \(sender.draggingSourceOperationMask.rawValue)")
+        return updateDrag(sender)
+    }
+    private func updateDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
         let operation = acceptedOperation(sender)
         receivingDrag = !operation.isEmpty
         glass.dropHighlighted = receivingDrag && localDragTile == nil
@@ -265,7 +272,7 @@ final class DockView: NSView, NSWindowDelegate {
         }
         return operation
     }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { updateDrag(sender) }
     override func draggingExited(_ sender: NSDraggingInfo?) {
         restoreReordering()
         finishDrop()
@@ -273,6 +280,7 @@ final class DockView: NSView, NSWindowDelegate {
     override func draggingEnded(_ sender: NSDraggingInfo) { finishDrop() }
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let accepted = !acceptedOperation(sender).isEmpty && !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty
+        dragLogger.notice("Prepare drop accepted: \(accepted)")
         sender.animatesToDestination = accepted && localDragTile != nil && model.animationsAllowed
         return accepted
     }
@@ -297,6 +305,7 @@ final class DockView: NSView, NSWindowDelegate {
             return true
         }
         let urls = DockDragPayload.urls(from: sender.draggingPasteboard)
+        dragLogger.notice("Drop received, file count: \(urls.count)")
         guard !urls.isEmpty, !acceptedOperation(sender).isEmpty else { return false }
         let point = convert(sender.draggingLocation, from: nil)
         let target = tiles.first { $0.frame.contains(point) }?.item.id

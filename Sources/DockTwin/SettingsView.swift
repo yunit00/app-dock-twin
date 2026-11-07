@@ -13,6 +13,8 @@ struct SettingsView: View {
                     Text("Основной").tag("main")
                     ForEach(NSScreen.screens, id: \.dockID) { Text($0.localizedName).tag($0.dockID) }
                 }
+                Toggle("Только на рабочем столе", isOn: $model.preferences.desktopOnly)
+                    .help("Окна приложений перекрывают панель. Она остаётся доступна на свободной области рабочего стола.")
                 Toggle("Автоматически скрывать", isOn: $model.preferences.autoHide)
             }
             Section("Внешний вид") {
@@ -28,13 +30,13 @@ struct SettingsView: View {
             }
             Section("Содержимое") {
                 Button("Добавить приложения, файлы или папки…") { model.chooseItems() }
-                Text("Из системного Dock перетаскивайте приложение с зажатой ⌘ Command. Из Finder — обычным перетаскиванием. Чтобы изменить порядок, тяните иконку вдоль панели до нужного места. Удаление доступно в контекстном меню.")
+                Text("Перетащите приложение, файл или папку из Finder. Чтобы изменить порядок, тяните иконку вдоль панели до нужного места. Удаление доступно в контекстном меню.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .padding(12)
-        .frame(width: 470, height: 480)
+        .frame(width: 470, height: 520)
     }
 }
 

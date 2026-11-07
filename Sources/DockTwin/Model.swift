@@ -47,14 +47,19 @@ struct DockPreferences: Codable {
     var iconSize: Double = 48
     var magnification: Double = 1.6
     var autoHide = false
+    var desktopOnly = true
     var showRunning = true
     var screenID: String = "main"
     var animationsEnabled = true
 
+    var panelLevel: NSWindow.Level {
+        desktopOnly ? NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1) : .floating
+    }
+
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case edge, iconSize, magnification, autoHide, showRunning, screenID, animationsEnabled
+        case edge, iconSize, magnification, autoHide, desktopOnly, showRunning, screenID, animationsEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -63,6 +68,7 @@ struct DockPreferences: Codable {
         iconSize = try values.decodeIfPresent(Double.self, forKey: .iconSize) ?? 48
         magnification = try values.decodeIfPresent(Double.self, forKey: .magnification) ?? 1.6
         autoHide = try values.decodeIfPresent(Bool.self, forKey: .autoHide) ?? false
+        desktopOnly = try values.decodeIfPresent(Bool.self, forKey: .desktopOnly) ?? true
         showRunning = try values.decodeIfPresent(Bool.self, forKey: .showRunning) ?? true
         screenID = try values.decodeIfPresent(String.self, forKey: .screenID) ?? "main"
         animationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .animationsEnabled) ?? true
