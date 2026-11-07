@@ -35,6 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dock = DockView(model: model)
         dock.showSettings = { [weak self] in self?.openSettings() }
         panel.contentView = dock
+        // Register the window as well as its content view for cross-process Dock drags.
+        panel.delegate = dock
+        panel.registerForDraggedTypes(DockDragPayload.types)
         model.onChange = { [weak self] in self?.refresh() }
         buildMenu()
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSApplication.didChangeScreenParametersNotification, object: nil)

@@ -175,12 +175,17 @@ final class DockModel: ObservableObject {
 // Dock and older AppKit sources can publish filename lists instead of file URLs.
 enum DockDragPayload {
     static let filenames = NSPasteboard.PasteboardType("NSFilenamesPboardType")
-    static let types: [NSPasteboard.PasteboardType] = [.fileURL, .URL, filenames]
+    static let legacyURL = NSPasteboard.PasteboardType("Apple URL pasteboard type")
+    static let types: [NSPasteboard.PasteboardType] = [.fileURL, .URL, filenames, legacyURL]
 
     static func urls(from pasteboard: NSPasteboard) -> [URL] {
         var urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if let paths = pasteboard.propertyList(forType: filenames) as? [String] {
             urls += paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
+        }
+        if let values = pasteboard.propertyList(forType: legacyURL) as? [String],
+           let value = values.first, let url = URL(string: value), url.isFileURL {
+            urls.append(url)
         }
         for item in pasteboard.pasteboardItems ?? [] {
             for type in [NSPasteboard.PasteboardType.fileURL, .URL] {

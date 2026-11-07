@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-final class DockView: NSView {
+final class DockView: NSView, NSWindowDelegate {
     let model: DockModel
     var showSettings: (() -> Void)?
     private let glass = DockBackgroundView()
@@ -131,10 +131,10 @@ final class DockView: NSView {
                 let size = sizes[index]
                 let rect: NSRect
                 switch edge {
-                case .bottom: rect = NSRect(x: offset, y: 6, width: size, height: size)
-                case .top: rect = NSRect(x: offset, y: bounds.height - size - 6, width: size, height: size)
-                case .left: rect = NSRect(x: 6, y: bounds.height - offset - size, width: size, height: size)
-                case .right: rect = NSRect(x: bounds.width - size - 6, y: bounds.height - offset - size, width: size, height: size)
+                case .bottom: rect = NSRect(x: offset, y: 2, width: size, height: size + 5)
+                case .top: rect = NSRect(x: offset, y: bounds.height - size - 7, width: size, height: size + 5)
+                case .left: rect = NSRect(x: 2, y: bounds.height - offset - size, width: size + 5, height: size)
+                case .right: rect = NSRect(x: bounds.width - size - 7, y: bounds.height - offset - size, width: size + 5, height: size)
                 }
                 tile.animator().frame = rect
                 offset += size + spacing
@@ -211,12 +211,16 @@ final class DockView: NSView {
         glass.dropHighlighted = receivingDrag
         return operation
     }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { acceptedOperation(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
     override func draggingExited(_ sender: NSDraggingInfo?) { finishDrop() }
     override func draggingEnded(_ sender: NSDraggingInfo) { finishDrop() }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !acceptedOperation(sender).isEmpty }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        !acceptedOperation(sender).isEmpty && !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty
+    }
     private func acceptedOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard !DockDragPayload.urls(from: sender.draggingPasteboard).isEmpty else { return [] }
+        // Some system sources supply file data lazily. Negotiate using advertised types,
+        // then read and validate the URLs when the user releases the drag.
+        guard sender.draggingPasteboard.availableType(from: DockDragPayload.types) != nil else { return [] }
         return DockDragPayload.operation(for: sender.draggingSourceOperationMask)
     }
     private func finishDrop() {
@@ -268,17 +272,20 @@ final class DockTile: NSView, NSDraggingSource {
     override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
     override func layout() {
         super.layout()
-        icon.frame = bounds
-        // The icon's transparent inset accommodates the running dot without a separate lane.
         let diameter: CGFloat = 3
+        let indicatorSpace: CGFloat = 5
         switch model.preferences.edge {
         case .bottom:
+            icon.frame = NSRect(x: 0, y: indicatorSpace, width: bounds.width, height: bounds.height - indicatorSpace)
             indicator.frame = NSRect(x: bounds.midX - diameter / 2, y: 0, width: diameter, height: diameter)
         case .top:
+            icon.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - indicatorSpace)
             indicator.frame = NSRect(x: bounds.midX - diameter / 2, y: bounds.height - diameter, width: diameter, height: diameter)
         case .left:
+            icon.frame = NSRect(x: indicatorSpace, y: 0, width: bounds.width - indicatorSpace, height: bounds.height)
             indicator.frame = NSRect(x: 0, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
         case .right:
+            icon.frame = NSRect(x: 0, y: 0, width: bounds.width - indicatorSpace, height: bounds.height)
             indicator.frame = NSRect(x: bounds.width - diameter, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
         }
     }

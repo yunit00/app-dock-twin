@@ -127,6 +127,33 @@ final class DockModelTests {
             opened = false
         }
     }
+    func testLegacyDockURLAndIndicatorSpacing() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let url = URL(fileURLWithPath: "/Applications/App With Spaces.app")
+        pasteboard.setPropertyList([url.absoluteString, "App With Spaces"], forType: DockDragPayload.legacyURL)
+        expectEqual(DockDragPayload.urls(from: pasteboard), [url])
+        _ = NSApplication.shared
+        let model = emptyModel()
+        let tile = DockTile(item: DockItem(url: url), model: model)
+        for edge in DockEdge.allCases {
+            model.preferences.edge = edge
+            tile.frame = edge.vertical ? NSRect(x: 0, y: 0, width: 33, height: 28) : NSRect(x: 0, y: 0, width: 28, height: 33)
+            tile.layout()
+            let icon = tile.subviews[0].frame
+            let dot = tile.subviews[1].frame
+            let gap: CGFloat
+            switch edge {
+            case .left: gap = icon.minX - dot.maxX
+            case .right: gap = dot.minX - icon.maxX
+            case .bottom: gap = icon.minY - dot.maxY
+            case .top: gap = dot.minY - icon.maxY
+            }
+            expectEqual(gap, 2)
+            expectTrue(tile.bounds.contains(dot))
+            expectEqual(icon.width, icon.height)
+        }
+    }
     func testRemoteURLsAreIgnored() {
         let model = emptyModel()
         model.add([URL(string: "https://example.com")!])
@@ -155,7 +182,8 @@ extension DockModelTests {
             ("old settings migration and animation persistence", tests.testOldPreferencesSurviveNewAnimationSetting),
             ("Dock pasteboard compatibility", tests.testDockPasteboardCompatibility),
             ("settings button on every edge", tests.testSettingsButtonOnEveryEdge),
-            ("pin when dropped on unpinned item", tests.testDropOntoUnpinnedRunningItemPinsIt)
+            ("pin when dropped on unpinned item", tests.testDropOntoUnpinnedRunningItemPinsIt),
+            ("legacy Dock URL and indicator gap", tests.testLegacyDockURLAndIndicatorSpacing)
         ]
         for (name, test) in cases {
             tests.setUp()
